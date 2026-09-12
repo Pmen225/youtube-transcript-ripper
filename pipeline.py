@@ -12,6 +12,7 @@ import html
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -273,32 +274,45 @@ def run_pipeline(
         if progress:
             progress(dict(state))
 
+    pending = []
+    completed = 0
     for index, entry in enumerate(entries, 1):
         video_id = entry["id"]
         title = entry.get("title") or video_id
         if video_id in existing and existing[video_id].status == "complete" and (transcript_dir / f"{video_id}.txt").exists():
-            report(index, title, "resumed")
+            completed += 1
             continue
-        record = VideoRecord(index=index, video_id=video_id, title=title, url=VIDEO_URL.format(video_id))
-        report(index - 1, title, "fetching")
-        try:
-            transcript, source = fetch_transcript(video_id, language=language)
-            if transcript:
-                (transcript_dir / f"{video_id}.txt").write_text(transcript, encoding="utf-8")
-                record.transcript_chars = len(transcript)
-                record.transcript_source = source
-                record.status = "complete"
-            else:
-                record.status = "missing"
-        except Exception as error:
-            record.status = "error"
-            record.error = str(error)[:500]
-        existing[video_id] = record
-        records_path.write_text(
-            "".join(json.dumps(asdict(row), ensure_ascii=False) + "\n" for row in sorted(existing.values(), key=lambda item: item.index)),
-            encoding="utf-8",
-        )
-        report(index, title, record.status)
+        pending.append((index, video_id, title))
+
+    # ponytail: four workers; raise only after measuring rate limits on a real run.
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {
+            executor.submit(fetch_transcript, video_id, language): (index, video_id, title)
+            for index, video_id, title in pending
+        }
+        for future in as_completed(futures):
+            index, video_id, title = futures[future]
+            record = VideoRecord(index=index, video_id=video_id, title=title, url=VIDEO_URL.format(video_id))
+            report(completed, title, "fetching")
+            try:
+                transcript, source = future.result()
+                if transcript:
+                    (transcript_dir / f"{video_id}.txt").write_text(transcript, encoding="utf-8")
+                    record.transcript_chars = len(transcript)
+                    record.transcript_source = source
+                    record.status = "complete"
+                else:
+                    record.status = "missing"
+            except Exception as error:
+                record.status = "error"
+                record.error = str(error)[:500]
+            existing[video_id] = record
+            records_path.write_text(
+                "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in sorted((asdict(row) for row in existing.values()), key=lambda item: item["index"])),
+                encoding="utf-8",
+            )
+            completed += 1
+            report(completed, title, record.status)
 
     label = _source_label(source_url)
     parts = build_notebook_parts(root, label)

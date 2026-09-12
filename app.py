@@ -60,6 +60,22 @@ def _json(handler: BaseHTTPRequestHandler, payload: dict, status: int = 200) -> 
     handler.wfile.write(raw)
 
 
+def _resume_run(source_url: str) -> Path | None:
+    """Find an unfinished export for the same source after an app restart."""
+
+    for run_dir in sorted(EXPORT_ROOT.iterdir(), reverse=True) if EXPORT_ROOT.exists() else []:
+        state_path = run_dir / "state.json"
+        if not run_dir.is_dir() or not state_path.exists():
+            continue
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if state.get("source_url") == source_url and state.get("status") != "complete":
+            return run_dir
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     """Serve the UI and the tiny JSON API."""
 
@@ -114,8 +130,9 @@ class Handler(BaseHTTPRequestHandler):
             source_url = str(payload.get("url", "")).strip()
             if not source_url:
                 raise ValueError("Paste a YouTube URL first.")
-            job_id = uuid.uuid4().hex[:10]
-            run_dir = EXPORT_ROOT / job_id
+            existing_dir = _resume_run(source_url)
+            job_id = existing_dir.name if existing_dir else uuid.uuid4().hex[:10]
+            run_dir = existing_dir or EXPORT_ROOT / job_id
             job = {"id": job_id, "status": "running", "source_url": source_url, "run_dir": str(run_dir)}
             JOBS[job_id] = job
 
