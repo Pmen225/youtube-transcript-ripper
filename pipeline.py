@@ -173,6 +173,8 @@ def _source_label(source_url: str) -> str:
     path = urlsplit(source_url).path.strip("/")
     label = path.split("/")[0].lstrip("@") or "YouTube source"
     label = re.sub(r"[-_]+", " ", label)
+    if label.replace(" ", "").lower() == "team3dalpha":
+        return "Team 3D Alpha"
     return label.title()
 
 
