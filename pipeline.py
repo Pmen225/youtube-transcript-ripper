@@ -114,7 +114,15 @@ def fetch_transcript(video_id: str, language: str = "en") -> tuple[str, str]:
         if text:
             return text, "youtube-transcript-api"
     except Exception as error:
-        if type(error).__name__ in {"IpBlocked", "RequestBlocked"}:
+        if type(error).__name__ in {
+            "AgeRestricted",
+            "IpBlocked",
+            "NoTranscriptFound",
+            "RequestBlocked",
+            "TranscriptsDisabled",
+            "VideoUnavailable",
+            "VideoUnplayable",
+        }:
             return "", ""
 
     options = {
@@ -122,6 +130,7 @@ def fetch_transcript(video_id: str, language: str = "en") -> tuple[str, str]:
         "no_warnings": True,
         "skip_download": True,
         "ignoreerrors": True,
+        "socket_timeout": 10,
         "writesubtitles": True,
         "writeautomaticsub": True,
         "subtitleslangs": [language, "en-US", "en-GB"],
