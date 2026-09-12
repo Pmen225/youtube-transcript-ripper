@@ -27,6 +27,7 @@ from yt_dlp_transcripts.core import detect_url_type, extract_video_id
 
 MAX_CHARS = 500_000
 VIDEO_URL = "https://www.youtube.com/watch?v={}"
+YTDLP_CLIENTS = ("android_vr", "tv_embedded", "web_safari")
 TIMING_LINE = re.compile(
     r"^\s*(?:\d{1,2}:)?\d{1,2}:\d{2}[,.]\d{3}\s+-->\s+"
     r"(?:\d{1,2}:)?\d{1,2}:\d{2}[,.]\d{3}.*$"
@@ -105,52 +106,51 @@ def _caption_text(url: str, extension: str) -> str:
     return response.text
 
 
-def fetch_transcript(video_id: str, language: str = "en") -> tuple[str, str]:
+def fetch_transcript(video_id: str, language: str = "en") -> tuple[str, str, str]:
     """Fetch manual/automatic captions with a yt-dlp fallback."""
 
+    reason = "No transcript source returned text."
     try:
         fetched = YouTubeTranscriptApi().fetch(video_id, languages=(language,))
         text = clean_transcript(" ".join(snippet.text for snippet in fetched))
         if text:
-            return text, "youtube-transcript-api"
+            return text, "youtube-transcript-api", ""
     except Exception as error:
-        if type(error).__name__ in {
-            "AgeRestricted",
-            "IpBlocked",
-            "NoTranscriptFound",
-            "RequestBlocked",
-            "TranscriptsDisabled",
-            "VideoUnavailable",
-            "VideoUnplayable",
-        }:
-            return "", ""
+        reason = type(error).__name__
 
-    options = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "ignoreerrors": True,
-        "socket_timeout": 10,
-        "writesubtitles": True,
-        "writeautomaticsub": True,
-        "subtitleslangs": [language, "en-US", "en-GB"],
-    }
-    with yt_dlp.YoutubeDL(options) as ydl:
-        info = ydl.extract_info(VIDEO_URL.format(video_id), download=False) or {}
-    for catalog_name, source_name in (("subtitles", "manual"), ("automatic_captions", "automatic")):
-        catalog = info.get(catalog_name, {})
-        for lang in (language, "en-US", "en-GB", "en"):
-            for caption in catalog.get(lang, []):
-                extension = caption.get("ext", "")
-                if extension not in {"json3", "vtt", "srv1", "srv2", "srv3"}:
-                    continue
-                try:
-                    text = clean_transcript(_caption_text(caption["url"], extension))
-                except Exception:
-                    continue
-                if text:
-                    return text, f"yt-dlp-{source_name}"
-    return "", ""
+    for client in YTDLP_CLIENTS:
+        options = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "ignoreerrors": True,
+            "socket_timeout": 10,
+            "writesubtitles": True,
+            "writeautomaticsub": True,
+            "subtitleslangs": [language, "en-US", "en-GB"],
+            "extractor_args": {"youtube": {"player_client": [client]}},
+        }
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(VIDEO_URL.format(video_id), download=False) or {}
+        except Exception as error:
+            reason = f"{client}: {type(error).__name__}"
+            continue
+        for catalog_name, source_name in (("subtitles", "manual"), ("automatic_captions", "automatic")):
+            catalog = info.get(catalog_name, {})
+            for lang in (language, "en-US", "en-GB", "en", "en-orig"):
+                for caption in catalog.get(lang, []):
+                    extension = caption.get("ext", "")
+                    if extension not in {"json3", "vtt", "srv1", "srv2", "srv3"}:
+                        continue
+                    try:
+                        text = clean_transcript(_caption_text(caption["url"], extension))
+                    except Exception as error:
+                        reason = f"{client}: {type(error).__name__}"
+                        continue
+                    if text:
+                        return text, f"yt-dlp-{source_name}-{client}", ""
+    return "", "", reason
 
 
 def _video_entries(url: str) -> tuple[str, list[dict]]:
@@ -307,7 +307,7 @@ def run_pipeline(
             record = VideoRecord(index=index, video_id=video_id, title=title, url=VIDEO_URL.format(video_id))
             report(completed, title, "fetching")
             try:
-                transcript, source = future.result()
+                transcript, source, reason = future.result()
                 if transcript:
                     (transcript_dir / f"{video_id}.txt").write_text(transcript, encoding="utf-8")
                     record.transcript_chars = len(transcript)
@@ -315,6 +315,7 @@ def run_pipeline(
                     record.status = "complete"
                 else:
                     record.status = "missing"
+                    record.error = reason
             except Exception as error:
                 record.status = "error"
                 record.error = str(error)[:500]
@@ -333,7 +334,7 @@ def run_pipeline(
     missing = sum(row.status == "missing" for row in existing.values())
     errors = sum(row.status == "error" for row in existing.values())
     summary = {
-        "status": "complete",
+        "status": "complete" if not missing and not errors else "partial",
         "source_url": source_url,
         "kind": kind,
         "videos": total,
