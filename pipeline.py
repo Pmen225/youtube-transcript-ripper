@@ -113,8 +113,9 @@ def fetch_transcript(video_id: str, language: str = "en") -> tuple[str, str]:
         text = clean_transcript(" ".join(snippet.text for snippet in fetched))
         if text:
             return text, "youtube-transcript-api"
-    except Exception:
-        pass
+    except Exception as error:
+        if type(error).__name__ in {"IpBlocked", "RequestBlocked"}:
+            return "", ""
 
     options = {
         "quiet": True,
