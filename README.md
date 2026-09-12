@@ -21,6 +21,7 @@ Each run contains one cleaned text file per video, `records.jsonl`, `state.json`
 
 - Do not commit transcript exports, cookies, credentials, or API keys.
 - A video without accessible captions is recorded as `missing`; it is not silently treated as complete.
+- A run with any missing or failed videos is reported as `partial`; the record keeps the failure reason so it can be retried later.
 - YouTube can rate-limit large channel runs. The run is resumable, so rerun the same source folder after the limit clears.
 
 ## Checks
