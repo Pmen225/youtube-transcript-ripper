@@ -16,6 +16,15 @@ import requests
 import json
 import xml.etree.ElementTree as ET
 
+# The upstream package renamed get_transcript to the instance method fetch.
+# Keep the original package API working with both installed versions.
+if not hasattr(YouTubeTranscriptApi, 'get_transcript'):
+    def _legacy_get_transcript(video_id, languages=('en',)):
+        fetched = YouTubeTranscriptApi().fetch(video_id, languages=languages)
+        return [{'text': snippet.text} for snippet in fetched]
+
+    YouTubeTranscriptApi.get_transcript = staticmethod(_legacy_get_transcript)
+
 # Handle large CSV fields
 maxInt = sys.maxsize
 while True:

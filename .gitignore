@@ -1,5 +1,10 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
+exports/
+*.csv
+*.jsonl
+.venv/
+.env
 *.py[cod]
 *$py.class
 
